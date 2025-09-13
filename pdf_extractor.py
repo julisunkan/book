@@ -4,12 +4,14 @@ PDF to Tutorial Extractor
 Extracts text, images, and tables from PDF book and converts to organized modules
 """
 
-import fitz  # PyMuPDF
+import pymupdf as fitz  # PyMuPDF
 import os
 import re
 import sqlite3
 from PIL import Image
 import io
+import camelot
+import tabula
 
 class PDFExtractor:
     def __init__(self, pdf_path="book.pdf", output_dir="modules", images_dir="static/images"):
@@ -19,8 +21,9 @@ class PDFExtractor:
         self.doc = None
         self.chapters = []
         
-        # Configurable chapter detection keywords
-        self.chapter_keywords = [r"Chapter\s+\d+", r"Module\s+\d+", r"Lesson\s+\d+", r"Part\s+[IVX]+"]
+        # Configurable chapter detection keywords - more precise patterns
+        self.chapter_keywords = [r"^Chapter\s+\d+", r"^Module\s+\d+", r"^Lesson\s+\d+"]
+        self.exclude_patterns = [r'[.]{3,}', r'\d+\s*$', r'Contents', r'Index', r'Bibliography']
         
         # Ensure directories exist
         os.makedirs(self.output_dir, exist_ok=True)
@@ -74,35 +77,57 @@ class PDFExtractor:
         
         for page_num in range(self.doc.page_count):
             if self.doc is None:
-                return all_images
+                return []
             page = self.doc.load_page(page_num)
             text = page.get_text()
             
-            # Look for chapter markers
-            for keyword_pattern in self.chapter_keywords:
-                matches = re.finditer(keyword_pattern, text, re.IGNORECASE)
+            # Look for chapter markers with improved filtering
+            lines = text.split('\n')
+            for line in lines:
+                line = line.strip()
                 
-                for match in matches:
-                    # Get the full line containing the chapter
-                    lines = text.split('\n')
-                    for line in lines:
-                        if match.group() in line:
-                            chapter_title = line.strip()
-                            
-                            # Close previous chapter
-                            if current_chapter:
-                                current_chapter['end_page'] = page_num - 1
-                                chapters.append(current_chapter)
-                            
-                            # Start new chapter
-                            current_chapter = {
-                                'title': chapter_title,
-                                'start_page': page_num,
-                                'end_page': None,
-                                'content': [],
-                                'images': []
-                            }
-                            break
+                # Skip if line is too short or too long
+                if len(line) < 8 or len(line) > 150:
+                    continue
+                    
+                # Check if it matches chapter pattern
+                chapter_match = False
+                for keyword_pattern in self.chapter_keywords:
+                    if re.search(keyword_pattern, line, re.IGNORECASE):
+                        chapter_match = True
+                        break
+                        
+                if not chapter_match:
+                    continue
+                    
+                # Exclude TOC entries and other non-chapter lines
+                exclude_line = False
+                for exclude_pattern in self.exclude_patterns:
+                    if re.search(exclude_pattern, line):
+                        exclude_line = True
+                        break
+                        
+                if exclude_line:
+                    continue
+                    
+                # Skip if we've already seen this chapter title
+                chapter_title = re.sub(r'^[\s■▪•\-]+', '', line)  # Clean title
+                if any(ch['title'] == chapter_title for ch in chapters):
+                    continue
+                    
+                # This looks like a real chapter
+                if current_chapter:
+                    current_chapter['end_page'] = page_num - 1
+                    chapters.append(current_chapter)
+                
+                current_chapter = {
+                    'title': chapter_title,
+                    'start_page': page_num,
+                    'end_page': None,
+                    'content': [],
+                    'images': []
+                }
+                break  # Only one chapter per page
         
         # Close the last chapter
         if current_chapter:
@@ -156,71 +181,70 @@ class PDFExtractor:
         
         return extracted_images
 
-    def extract_tables_as_text(self, page_text):
-        """Simple table detection and conversion to markdown"""
-        lines = page_text.split('\n')
+    def extract_tables_from_page(self, page_num):
+        """Extract tables from a page using Camelot and Tabula"""
         tables = []
         
-        # Look for patterns that might be tables
-        potential_table_lines = []
-        for line in lines:
-            # Check if line has multiple columns separated by spaces
-            if len(line.split()) > 3 and '\t' not in line:
-                words = line.split()
-                # Check if words are reasonably spaced
-                if len(' '.join(words)) < len(line) * 0.8:  # Has significant spacing
-                    potential_table_lines.append(line)
-            elif potential_table_lines:
-                # End of potential table
-                if len(potential_table_lines) > 2:  # At least 3 rows
-                    table_text = self.convert_to_markdown_table(potential_table_lines)
-                    if table_text:
-                        tables.append(table_text)
-                potential_table_lines = []
-        
-        # Check last set of lines
-        if len(potential_table_lines) > 2:
-            table_text = self.convert_to_markdown_table(potential_table_lines)
-            if table_text:
-                tables.append(table_text)
+        try:
+            # Try Camelot first (better for vector PDFs)
+            camelot_tables = camelot.read_pdf(self.pdf_path, pages=str(page_num + 1))
+            
+            for table in camelot_tables:
+                if table.df is not None and not table.df.empty:
+                    # Convert to markdown table
+                    markdown_table = self.dataframe_to_markdown(table.df)
+                    if markdown_table:
+                        tables.append(markdown_table)
+        except Exception as e:
+            print(f"Camelot extraction failed for page {page_num}: {e}")
+            
+        # If Camelot didn't find tables, try Tabula (better for image-based PDFs)
+        if not tables:
+            try:
+                tabula_tables = tabula.read_pdf(self.pdf_path, pages=page_num + 1, multiple_tables=True)
+                
+                for df in tabula_tables:
+                    if df is not None and not df.empty:
+                        markdown_table = self.dataframe_to_markdown(df)
+                        if markdown_table:
+                            tables.append(markdown_table)
+            except Exception as e:
+                print(f"Tabula extraction failed for page {page_num}: {e}")
         
         return tables
+    
+    def dataframe_to_markdown(self, df):
+        """Convert a pandas DataFrame to markdown table"""
+        try:
+            # Clean the dataframe
+            df = df.fillna('')  # Fill NaN with empty string
+            
+            # Convert to markdown
+            markdown_lines = []
+            
+            # Header row
+            headers = [str(col).strip() for col in df.columns]
+            if headers and any(header for header in headers):  # Check if headers are meaningful
+                header_row = "| " + " | ".join(headers) + " |"
+                separator = "|" + "---|" * len(headers)
+                markdown_lines.append(header_row)
+                markdown_lines.append(separator)
+            
+            # Data rows
+            for _, row in df.iterrows():
+                cells = [str(cell).strip() for cell in row.values]
+                if any(cell for cell in cells):  # Skip empty rows
+                    row_line = "| " + " | ".join(cells) + " |"
+                    markdown_lines.append(row_line)
+            
+            if len(markdown_lines) > 2:  # At least header, separator, and one data row
+                return "\n".join(markdown_lines)
+                
+        except Exception as e:
+            print(f"Error converting dataframe to markdown: {e}")
+        
+        return None
 
-    def convert_to_markdown_table(self, lines):
-        """Convert detected table lines to markdown table format"""
-        if len(lines) < 2:
-            return None
-        
-        # Try to align columns
-        max_cols = 0
-        for line in lines:
-            cols = len(line.split())
-            if cols > max_cols:
-                max_cols = cols
-        
-        if max_cols < 2:
-            return None
-        
-        markdown_table = []
-        header_added = False
-        
-        for line in lines:
-            words = line.split()
-            if len(words) >= 2:
-                # Pad with empty cells if needed
-                while len(words) < max_cols:
-                    words.append("")
-                
-                row = "| " + " | ".join(words) + " |"
-                markdown_table.append(row)
-                
-                # Add header separator after first row
-                if not header_added:
-                    separator = "|" + "---|" * max_cols
-                    markdown_table.append(separator)
-                    header_added = True
-        
-        return "\n".join(markdown_table)
 
     def extract_chapter_content(self, chapter, chapter_num):
         """Extract content for a single chapter"""
@@ -236,7 +260,7 @@ class PDFExtractor:
             
             if cleaned_text.strip():
                 # Extract tables
-                tables = self.extract_tables_as_text(text)
+                tables = self.extract_tables_from_page(page_num)
                 
                 # Insert tables into text or add them separately
                 if tables:

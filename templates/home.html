@@ -1,0 +1,175 @@
+{% extends "layout.html" %}
+
+{% block title %}Tutorial Platform - Home{% endblock %}
+
+{% block content %}
+<div class="row">
+    <div class="col-12">
+        <h1 class="display-4 mb-4">
+            <i class="fas fa-graduation-cap text-primary"></i> 
+            Tutorial Platform
+        </h1>
+        <p class="lead">Interactive chapter-by-chapter learning experience</p>
+    </div>
+</div>
+
+<!-- Progress Overview -->
+<div class="row mb-5">
+    <div class="col-md-8">
+        <div class="card">
+            <div class="card-body">
+                <h5 class="card-title">
+                    <i class="fas fa-chart-line"></i> Overall Progress
+                </h5>
+                <div class="progress mb-3" style="height: 25px;">
+                    <div class="progress-bar bg-success" 
+                         role="progressbar" 
+                         style="width: {{ progress_percentage }}%"
+                         aria-valuenow="{{ progress_percentage }}" 
+                         aria-valuemin="0" 
+                         aria-valuemax="100">
+                        {{ "%.1f"|format(progress_percentage) }}%
+                    </div>
+                </div>
+                <p class="mb-0">
+                    <strong>{{ completed_modules }}</strong> of <strong>{{ total_modules }}</strong> modules completed
+                </p>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-4">
+        <div class="card">
+            <div class="card-body text-center">
+                {% if not modules %}
+                <h6 class="card-title text-warning">
+                    <i class="fas fa-exclamation-triangle"></i> No Modules Found
+                </h6>
+                <p class="card-text">Extract content from your PDF to get started.</p>
+                <form method="POST" action="{{ url_for('extract_pdf') }}">
+                    <button type="submit" class="btn btn-primary">
+                        <i class="fas fa-file-pdf"></i> Extract PDF
+                    </button>
+                </form>
+                {% else %}
+                <h6 class="card-title">
+                    <i class="fas fa-book-open"></i> Total Modules
+                </h6>
+                <div class="display-4 text-primary">{{ total_modules }}</div>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Modules List -->
+{% if modules %}
+<div class="row">
+    <div class="col-12">
+        <h3 class="mb-4">
+            <i class="fas fa-list"></i> Available Modules
+        </h3>
+    </div>
+</div>
+
+<div class="row">
+    {% for module in modules %}
+    <div class="col-md-6 col-lg-4 mb-4">
+        <div class="card h-100 module-card">
+            <div class="card-body d-flex flex-column">
+                <h5 class="card-title">
+                    <span class="badge bg-secondary me-2">{{ module.id }}</span>
+                    {{ module.title }}
+                </h5>
+                
+                <!-- Status Badge -->
+                <div class="mb-3">
+                    {% if module.status == 'completed' %}
+                        <span class="badge bg-success">
+                            <i class="fas fa-check-circle"></i> Completed
+                        </span>
+                        {% if module.completed_on %}
+                            <small class="text-muted d-block mt-1">
+                                Completed: {{ module.completed_on }}
+                            </small>
+                        {% endif %}
+                    {% elif module.status == 'in_progress' %}
+                        <span class="badge bg-warning">
+                            <i class="fas fa-clock"></i> In Progress
+                        </span>
+                    {% else %}
+                        <span class="badge bg-light text-dark">
+                            <i class="fas fa-circle"></i> Not Started
+                        </span>
+                    {% endif %}
+                </div>
+                
+                <!-- Action Button -->
+                <div class="mt-auto">
+                    {% if module.status == 'completed' %}
+                        <a href="{{ url_for('module_page', module_id=module.id) }}" 
+                           class="btn btn-outline-success btn-sm">
+                            <i class="fas fa-eye"></i> Review
+                        </a>
+                    {% elif module.status == 'in_progress' %}
+                        <a href="{{ url_for('module_page', module_id=module.id) }}" 
+                           class="btn btn-warning btn-sm">
+                            <i class="fas fa-play"></i> Continue
+                        </a>
+                    {% else %}
+                        <a href="{{ url_for('module_page', module_id=module.id) }}" 
+                           class="btn btn-primary btn-sm">
+                            <i class="fas fa-play"></i> Start
+                        </a>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+    </div>
+    {% endfor %}
+</div>
+{% endif %}
+
+<!-- PDF Extraction Form -->
+{% if modules %}
+<div class="row mt-5">
+    <div class="col-12">
+        <div class="card border-info">
+            <div class="card-body">
+                <h5 class="card-title text-info">
+                    <i class="fas fa-sync-alt"></i> Re-extract Content
+                </h5>
+                <p class="card-text">
+                    If you've updated your PDF or want to refresh the content, click below to re-extract.
+                </p>
+                <form method="POST" action="{{ url_for('extract_pdf') }}" onsubmit="return confirm('This will overwrite existing modules. Continue?')">
+                    <button type="submit" class="btn btn-info">
+                        <i class="fas fa-file-pdf"></i> Re-extract PDF
+                    </button>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+{% endif %}
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+// Add some interactive elements
+document.addEventListener('DOMContentLoaded', function() {
+    // Add hover effects to module cards
+    const moduleCards = document.querySelectorAll('.module-card');
+    moduleCards.forEach(card => {
+        card.addEventListener('mouseenter', function() {
+            this.style.transform = 'translateY(-5px)';
+            this.style.transition = 'transform 0.2s ease';
+        });
+        
+        card.addEventListener('mouseleave', function() {
+            this.style.transform = 'translateY(0)';
+        });
+    });
+});
+</script>
+{% endblock %}
